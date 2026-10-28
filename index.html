@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>TG Auto Blaster</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Courier New', monospace; background: #0a0a0a; color: #d0d0d0; padding: 20px; max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 18px; color: #4ade80; margin-bottom: 12px; letter-spacing: 2px; }
+  h2 { font-size: 12px; color: #facc15; margin: 10px 0 6px; text-transform: uppercase; letter-spacing: 1px; }
+  .box { background: #141414; border: 1px solid #2a2a2a; padding: 12px; margin-bottom: 12px; border-radius: 4px; }
+  label { display: block; font-size: 11px; color: #888; margin: 6px 0 3px; }
+  input, textarea, select { width: 100%; background: #0a0a0a; border: 1px solid #333; color: #d0d0d0; padding: 7px; font-family: inherit; font-size: 12px; border-radius: 3px; }
+  textarea { min-height: 60px; resize: vertical; }
+  input:focus, textarea:focus { outline: none; border-color: #4ade80; }
+  button { background: #4ade80; color: #0a0a0a; border: none; padding: 9px 16px; font-family: inherit; font-weight: bold; font-size: 12px; cursor: pointer; border-radius: 3px; margin-right: 6px; margin-top: 8px; }
+  button:hover { background: #22c55e; }
+  button.stop { background: #ef4444; color: #fff; }
+  button:disabled { background: #333; color: #666; cursor: not-allowed; }
+  #groups { max-height: 220px; overflow-y: auto; background: #000; border: 1px solid #222; padding: 6px; font-size: 11px; margin-top: 6px; }
+  .g { padding: 3px 4px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; gap: 6px; }
+  .g .t { flex: 1; }
+  .g .badge { font-size: 10px; padding: 1px 5px; border-radius: 2px; }
+  .yes { background: #14532d; color: #4ade80; }
+  .no { background: #450a0a; color: #f87171; }
+  #log { background: #000; border: 1px solid #222; padding: 8px; height: 200px; overflow-y: auto; font-size: 11px; line-height: 1.5; }
+  .ok { color: #4ade80; } .err { color: #ef4444; } .warn { color: #facc15; } .info { color: #60a5fa; }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  .hint { font-size: 10px; color: #666; margin-top: 3px; }
+  #stats { color: #888; font-size: 11px; text-transform: none; letter-spacing: 0; }
+  #next { color: #facc15; font-size: 11px; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<h1>▸ TG AUTO BLASTER</h1>
+
+<div class="box">
+  <h2>Bot token</h2>
+  <textarea id="tokens" placeholder="123456:ABC..."></textarea>
+  <div class="hint">Token từ @BotFather. Add bot vào các group trước, gõ 1 tin trong mỗi group để tool tự dò được — không cần lấy ID tay.</div>
+</div>
+
+<div class="box">
+  <h2>1. Tự dò group bot đang ở</h2>
+  <button id="scan">QUÉT TỰ ĐỘNG</button>
+  <button id="selAll">CHỌN GỬI ĐƯỢC</button>
+  <button id="selNone">BỎ CHỌN</button>
+  <div id="groups">chưa quét</div>
+</div>
+
+<div class="box">
+  <h2>2. Payload + hẹn giờ</h2>
+  <div class="row">
+    <div>
+      <label>Links (mỗi dòng 1)</label>
+      <textarea id="links" placeholder="https://example.com/a"></textarea>
+    </div>
+    <div>
+      <label>Template ({link})</label>
+      <textarea id="template">🔥 {link}</textarea>
+      <label>Parse mode</label>
+      <select id="pm">
+        <option value="">Plain</option>
+        <option value="HTML">HTML</option>
+        <option value="MarkdownV2">MarkdownV2</option>
+      </select>
+    </div>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <div>
+      <label>Chu kỳ (đơn vị)</label>
+      <select id="unit">
+        <option value="min">Phút</option>
+        <option value="hour" selected>Giờ</option>
+      </select>
+    </div>
+    <div>
+      <label>Mỗi bao nhiêu đơn vị</label>
+      <input id="period" type="number" value="1" min="1">
+    </div>
+    <div>
+      <label>Delay giữa mỗi tin (ms)</label>
+      <input id="delay" type="number" value="3000" min="1000">
+    </div>
+  </div>
+  <div class="hint">Chu kỳ = khoảng cách giữa mỗi vòng rải. VD: 1 giờ = mỗi 60 phút tự rải lại toàn bộ danh sách. Delay = khoảng cách giữa 2 tin liên tiếp trong cùng 1 vòng.</div>
+  <div id="next">chưa chạy</div>
+</div>
+
+<button id="start">▶ CHẠY TỰ ĐỘNG</button>
+<button id="runOnce">▶ RẢI 1 VÒNG NGAY</button>
+<button id="stop" class="stop" disabled>■ STOP</button>
+
+<div class="box" style="margin-top:12px">
+  <h2>Log <span id="stats"></span></h2>
+  <div id="log"></div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const API = 'https://api.telegram.org';
+  let groups = [];
+  let running = false;
+  let loopTimer = null;
+  let abortCtrl = null;
+  const stats = { ok: 0, skip: 0, err: 0, total: 0 };
+
+  const $ = id => document.getElementById(id);
+  const log = (m, c='') => {
+    const el = document.createElement('div');
+    if (c) el.className = c;
+    el.textContent = `[${new Date().toLocaleTimeString()}] ${m}`;
+    $('log').appendChild(el);
+    $('log').scrollTop = $('log').scrollHeight;
+  };
+  const paint = () => { $('stats').textContent = `— ok=${stats.ok} skip=${stats.skip} err=${stats.err} / ${stats.total}`; };
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const rand = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
+  const lines = s => s.split('\n').map(x => x.trim()).filter(Boolean);
+
+  async function api(token, method, body, signal) {
+    const r = await fetch(`${API}/bot${token}/${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+      signal
+    });
+    return r.json();
+  }
+
+  async function scanFromUpdates(token, signal) {
+    const j = await api(token, 'getUpdates', { limit: 100, allowed_updates: ['message','channel_post','my_chat_member'] }, signal);
+    if (!j.ok) return [];
+    const seen = new Map();
+    for (const u of j.result) {
+      const m = u.message || u.channel_post;
+      if (!m || !m.chat) continue;
+      const c = m.chat;
+      if (c.type === 'group' || c.type === 'supergroup' || c.type === 'channel') {
+        seen.set(String(c.id), { id: String(c.id), title: c.title || c.username || String(c.id), type: c.type });
+      }
+    }
+    return [...seen.values()];
+  }
+
+  async function checkBotCanSend(token, chat_id, signal) {
+    const g = await api(token, 'getChat', { chat_id }, signal);
+    if (!g.ok) return { ok: false, err: g.description };
+    const me = await api(token, 'getMe', {}, signal);
+    if (!me.ok) return { ok: false, err: 'getMe fail' };
+    const botId = me.result.id;
+    const cm = await api(token, 'getChatMember', { chat_id, user_id: botId }, signal);
+    if (!cm.ok) return { ok: false, err: cm.description };
+    const st = cm.result.status;
+    if (st !== 'administrator' && st !== 'creator' && st !== 'member') return { ok: false, err: 'status: ' + st };
+    if (cm.result.is_member === false) return { ok: false, err: 'không phải member' };
+    return { ok: true, status: st, title: g.result.title || g.result.username || String(chat_id), type: g.result.type };
+  }
+
+  $('scan').onclick = async () => {
+    const tokens = lines($('tokens').value);
+    if (!tokens.length) return log('chưa có token', 'err');
+    $('groups').textContent = 'đang quét…';
+    groups = [];
+    const pool = new Map();
+    for (const tk of tokens) {
+      const ups = await scanFromUpdates(tk, abortCtrl?.signal);
+      for (const g of ups) if (!pool.has(g.id)) pool.set(g.id, g);
+    }
+    log(`tìm thấy ${pool.size} group thô`, 'info');
+    const out = [];
+    for (const c of pool.values()) {
+      const tk = tokens[Math.floor(Math.random() * tokens.length)];
+      try {
+        const r = await checkBotCanSend(tk, c.id, abortCtrl?.signal);
+        if (r.ok) { out.push({ id: c.id, title: r.title, type: r.type, canSend: true }); log(`✓ ${r.title}`, 'ok'); }
+        else { out.push({ id: c.id, title: c.title, type: c.type, canSend: false, reason: r.err }); log(`✗ ${c.title} — ${r.err}`, 'warn'); }
+      } catch (e) {
+        out.push({ id: c.id, title: c.title, type: c.type, canSend: false, reason: e.message });
+      }
+      await sleep(rand(250, 600));
+    }
+    groups = out;
+    renderGroups();
+    log(`xong: ${out.filter(g => g.canSend).length} gửi được / ${out.length}`, 'ok');
+  };
+
+  function renderGroups() {
+    const el = $('groups');
+    el.innerHTML = '';
+    if (!groups.length) { el.textContent = 'không có group nào'; return; }
+    groups.sort((a, b) => (b.canSend ? 1 : 0) - (a.canSend ? 1 : 0));
+    for (const g of groups) {
+      const row = document.createElement('label');
+      row.className = 'g';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.dataset.id = g.id;
+      cb.disabled = !g.canSend; cb.checked = g.canSend;
+      const t = document.createElement('span');
+      t.className = 't'; t.textContent = `${g.title} (${g.id})`;
+      const b = document.createElement('span');
+      b.className = 'badge ' + (g.canSend ? 'yes' : 'no');
+      b.textContent = g.canSend ? 'OK' : (g.reason || 'no');
+      row.append(cb, t, b); el.appendChild(row);
+    }
+  }
+
+  $('selAll').onclick = () => document.querySelectorAll('#groups input:not([disabled])').forEach(cb => cb.checked = true);
+  $('selNone').onclick = () => document.querySelectorAll('#groups input').forEach(cb => cb.checked = false);
+
+  async function sendOne(token, chat_id, text, pm, signal) {
+    const body = { chat_id, text };
+    if (pm) body.parse_mode = pm;
+    for (let a = 0; a <= 2; a++) {
+      if (signal.aborted) throw new Error('aborted');
+      try {
+        const j = await api(token, 'sendMessage', body, signal);
+        if (j.ok) return { ok: true };
+        if (j.error_code === 429) {
+          const w = (j.parameters?.retry_after || 5) * 1000;
+          log(`flood ${chat_id} — đợi ${w/1000}s`, 'warn');
+          await sleep(w); continue;
+        }
+        if (j.error_code === 400 || j.error_code === 403) return { ok: false, fatal: true, err: j.description };
+        if (a < 2) { await sleep(1000 * (a + 1)); continue; }
+        return { ok: false, err: j.description };
+      } catch (e) {
+        if (signal.aborted) throw e;
+        if (a < 2) { await sleep(1000 * (a + 1)); continue; }
+        return { ok: false, err: e.message };
+      }
+    }
+    return { ok: false, err: 'exhausted' };
+  }
+
+  async function runRound() {
+    const tokens = lines($('tokens').value);
+    const ids = [...document.querySelectorAll('#groups input:checked')].map(cb => cb.dataset.id);
+    const links = lines($('links').value);
+    const tpl = $('template').value || '{link}';
+    const pm = $('pm').value;
+    const delay = Math.max(1000, +$('delay').value || 3000);
+    if (!tokens.length || !ids.length || !links.length) { log('thiếu token / group / link', 'err'); return false; }
+    abortCtrl = new AbortController();
+    const signal = abortCtrl.signal;
+    const queue = [];
+    for (const gid of ids) for (const l of links) queue.push({ gid, l });
+    stats.total = queue.length; stats.ok = stats.skip = stats.err = 0; paint();
+    log(`bắt đầu vòng: ${queue.length} tin`, 'info');
+    for (const item of queue) {
+      if (signal.aborted) break;
+      const tk = tokens[Math.floor(Math.random() * tokens.length)];
+      const text = tpl.replace(/\{link\}/g, item.l);
+      const r = await sendOne(tk, item.gid, text, pm, signal);
+      if (r.ok) { stats.ok++; log(`✓ ${item.gid} :: ${item.l}`, 'ok'); }
+      else if (r.fatal) { stats.skip++; log(`✗ ${item.gid} :: ${r.err}`, 'warn'); }
+      else { stats.err++; log(`✗ ${item.gid} :: ${r.err}`, 'err'); }
+      paint();
+      await sleep(delay);
+    }
+    log(`xong vòng: ok=${stats.ok} skip=${stats.skip} err=${stats.err}`, 'ok');
+    return true;
+  }
+
+  function scheduleNext() {
+    if (!running) return;
+    const unit = $('unit').value;
+    const period = Math.max(1, +$('period').value || 1);
+    const ms = period * (unit === 'hour' ? 3600000 : 60000);
+    const t = new Date(Date.now() + ms);
+    $('next').textContent = `vòng kế: ${t.toLocaleString()}`;
+    loopTimer = setTimeout(async () => {
+      if (!running) return;
+      await runRound();
+      scheduleNext();
+    }, ms);
+  }
+
+  $('runOnce').onclick = async () => {
+    $('runOnce').disabled = true;
+    await runRound();
+    $('runOnce').disabled = false;
+  };
+
+  $('start').onclick = async () => {
+    if (running) return;
+    running = true;
+    $('start').disabled = true;
+    $('stop').disabled = false;
+    $('runOnce').disabled = true;
+    $('log').innerHTML = '';
+    log('CHẠY TỰ ĐỘNG', 'info');
+    const ok = await runRound();
+    if (ok && running) scheduleNext();
+  };
+
+  $('stop').onclick = () => {
+    running = false;
+    clearTimeout(loopTimer);
+    if (abortCtrl) abortCtrl.abort();
+    $('start').disabled = false;
+    $('stop').disabled = true;
+    $('runOnce').disabled = false;
+    $('next').textContent = 'đã dừng';
+    log('STOP', 'warn');
+  };
+})();
+</script>
+</body>
+</html>
